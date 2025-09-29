@@ -44,7 +44,7 @@ const uint16_t UDP_PORT_LISTEN = 8001;
 const uint16_t REPORT_PORT     = 8002;
 EthernetUDP Udp;
 
-IPAddress lastPeerIP(10, 1, 100, 210);
+IPAddress lastPeerIP(10, 1, 100, 100);
 bool      hasPeer = false;
 
 // --- Bench switches ---
@@ -53,7 +53,7 @@ bool      hasPeer = false;
 IPAddress REPORT_IP(10, 1, 100, 100); // ใส่ IP เครื่อง ROS 
 
 // ==================== Inputs/Outputs ====================
-#define EMER_PIN    32 //36
+#define EMER_PIN    32
 #define BUMPER_PIN  26
 
 const bool OUTPUT_ACTIVE_LOW = false;
@@ -62,7 +62,7 @@ const bool ACTIVE_LOW        = true;
 const uint32_t DEBOUNCE_MS        = 25;
 const uint32_t STARTUP_GRACE_MS   = 300;
 const uint32_t REPORT_INTERVAL_MS = 50;
-const uint32_t LIDAR_HOLD_MS      = 0; //0 = ค้างจนกว่าจะมีคำสั่งเคลียร์
+const uint32_t LIDAR_HOLD_MS      = 0; // 0 = ค้างจนกว่าจะมีคำสั่งเคลียร์
 
 uint32_t g_boot_ms = 0;
 
@@ -194,6 +194,20 @@ void sendOutputsReport() {
   Udp.write((uint8_t*)buf, n);
   Udp.endPacket();
 }
+
+// --- OUT ---
+void maybeReportOutputs() {
+  static uint32_t last_ms  = 0;
+  static uint8_t  last_msk = 0xFF;
+  uint32_t now = millis();
+  uint8_t  m   = buildOutputsMask();
+  if (m != last_msk || (now - last_ms) >= REPORT_INTERVAL_MS) {
+    sendOutputsReport();
+    last_msk = m;
+    last_ms  = now;
+  }
+}
+// -----------------------------------------------
 
 void maybeReportInputs(uint8_t mask) {
   static uint32_t last_ms = 0;
@@ -329,6 +343,7 @@ void applyCommand(int32_t cmd) {
     } break;
   }
   printState("STATE");
+  maybeReportOutputs();                           // NEW/CHANGED: รายงาน OUT หลังเปลี่ยน
 }
 
 void applyCase(int32_t c) {
@@ -349,6 +364,7 @@ void applyCase(int32_t c) {
   }
 }
 
+// ==================== Decision ====================
 // ตัดสินใจ “เฉพาะตอนเปลี่ยนเคส” -> ไม่รีเซ็ต blink
 void resolveAndApply() {
   setOutputByIndex(RELAY2_IDX, true);
@@ -411,16 +427,16 @@ void setup() {
   Serial.println();
   Serial.println(F("=== ESP32 I/O Bench + W5500/UDP — BYPASS with 3/-3, cases 0/1/-1/2/-2 ==="));
   Serial.println(F("Pins: EMER=36 (INPUT + external pull-up), BUMPER=26 (INPUT_PULLUP)"));
-  Serial.println(F("Serial/UDP cmds: 1,0,-1,2,-2, 3/-3 | IN:@50ms, OUT:on 2/-2"));
+  Serial.println(F("Serial/UDP cmds: 1,0,-1,2,-2, 3/-3 | IN:@50ms, OUT:@50ms"));
 
   // Inputs
-  pinMode(EMER_PIN,   INPUT_PULLUP); //GPIO36 ไม่มี pull-up ภายใน ใช้ R ภายนอกเท่านั้น
+  pinMode(EMER_PIN,   INPUT_PULLUP);
   pinMode(BUMPER_PIN, INPUT_PULLUP);
 
   // Outputs
   for (int i = 0; i < 8; i++) { pinMode(OUT_PINS[i], OUTPUT); g_blink[i] = {false,false,0,0,0,0,0}; }
   setDefaultOutputs();
-  setOutputByIndex(RELAY2_IDX, true); // O7 Always ON
+  setOutputByIndex(RELAY2_IDX, true); // O7 ON เสมอ
 
   // Ethernet/W5500
   SPI.begin(W5500_SCK, W5500_MISO, W5500_MOSI, W5500_CS);
@@ -455,6 +471,7 @@ void setup() {
   // first input report
   uint8_t mask = updateInputsDebounced();
   sendInputsReport(mask);
+  sendOutputsReport();                     // NEW/CHANGED: ส่ง OUT ครั้งแรก
 
   g_boot_ms = millis();
   Serial.println(F("Ready."));
@@ -492,7 +509,8 @@ void loop() {
     prev_emer   = emergency_active;
 
     resolveAndApply();
-    maybeReportInputs(mask);
+    maybeReportInputs(mask);      // เปิดรายงาน IN
+    maybeReportOutputs();         // เปิดรายงาน OUT
   }
 
   // --- UDP receive ---
@@ -503,7 +521,7 @@ void loop() {
 
     int32_t cmd = parseCmdFromPacket(packetSize);
 
-    if (cmd == 3)        { applyBypass(true);  }
+    if      (cmd == 3)   { applyBypass(true);  }
     else if (cmd == -3)  { applyBypass(false); }
     else if (cmd == -1)  { lidar_stop_active = true; lidar_stop_last_ms = millis(); }
     else if (cmd == 1 || cmd == 0 || cmd == 2 || cmd == -2) {
@@ -521,9 +539,9 @@ void loop() {
     if (s.length()) {
       int32_t val = (int32_t)s.toInt();
 
-      if (val == 3)        { applyBypass(true);  }
-      else if (val == -3)  { applyBypass(false); }
-      else if (val == -1)  { lidar_stop_active = true; lidar_stop_last_ms = millis(); }
+      if      (val == 3)  { applyBypass(true);  }
+      else if (val == -3) { applyBypass(false); }
+      else if (val == -1) { lidar_stop_active = true; lidar_stop_last_ms = millis(); }
       else if (val == 1 || val == 0 || val == 2 || val == -2) {
         requested_case = val;
         requested_case_ms = millis();

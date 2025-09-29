@@ -25,7 +25,11 @@ class IOUDPNode(Node):
         self.declare_parameter('topic_status', '/gmr_controllers/status')
         self.declare_parameter('topic_distance', '/closest_object_distance')
         self.declare_parameter('topic_inputs', '/io/inputs')
-        self.declare_parameter('topic_bypass', '/io/bypass')   # Int32: expect 3 or -3  # NEW/CHANGED
+        self.declare_parameter('topic_bypass', '/io/bypass')       # Int32: 3 / -3
+
+        # ----- outputs -----
+        self.declare_parameter('topic_outputs', '/io/outputs')            # Int32MultiArray [O1..O8]
+        self.declare_parameter('topic_outputs_mask', '/io/outputs_mask')  # Int32 (mask)
 
         self.declare_parameter('distance_threshold', 1.0)
         self.declare_parameter('alert_value', -1)
@@ -42,7 +46,7 @@ class IOUDPNode(Node):
         self.declare_parameter('dedupe_same_value', True)
         self.declare_parameter('require_status_before_distance', True)
 
-        # Debug state topics (ตามที่ขอให้มีสถานะบอก)
+        # Debug state topics
         self.declare_parameter('publish_debug_bools', True)
 
         # ===== Read params =====
@@ -54,7 +58,11 @@ class IOUDPNode(Node):
         self.topic_status      = self.get_parameter('topic_status').get_parameter_value().string_value
         self.topic_distance    = self.get_parameter('topic_distance').get_parameter_value().string_value
         self.topic_inputs      = self.get_parameter('topic_inputs').get_parameter_value().string_value
-        self.topic_bypass      = self.get_parameter('topic_bypass').get_parameter_value().string_value  # NEW/CHANGED
+        self.topic_bypass      = self.get_parameter('topic_bypass').get_parameter_value().string_value
+
+        # ----- outputs -----
+        self.topic_outputs_arr = self.get_parameter('topic_outputs').get_parameter_value().string_value
+        self.topic_outputs_mask= self.get_parameter('topic_outputs_mask').get_parameter_value().string_value
 
         self.distance_threshold = float(self.get_parameter('distance_threshold').get_parameter_value().double_value)
         self.alert_value        = int(self.get_parameter('alert_value').get_parameter_value().integer_value)
@@ -83,15 +91,18 @@ class IOUDPNode(Node):
         self.create_subscription(Int32,   self.topic_stop,     self.stop_callback,     self.qos)
         self.create_subscription(ControllerStatus, self.topic_status,   self.status_callback,   self.qos)
         self.create_subscription(Float32, self.topic_distance, self.distance_callback, self.qos)
-        self.create_subscription(Int32,   self.topic_bypass,   self.bypass_callback_int32, 10)  # NEW/CHANGED
+        self.create_subscription(Int32,   self.topic_bypass,   self.bypass_callback_int32, 10)
 
         # ===== Publishers =====
-        self.pub_inputs = self.create_publisher(Int32MultiArray, self.topic_inputs, 10)
+        self.pub_inputs       = self.create_publisher(Int32MultiArray, self.topic_inputs, self.qos)
+        self.pub_outputs_arr  = self.create_publisher(Int32MultiArray, self.topic_outputs_arr, self.qos)
+        self.pub_outputs_mask = self.create_publisher(Int32,           self.topic_outputs_mask, self.qos)
+
         if self.publish_debug_bools:
             self.pub_em     = self.create_publisher(Bool, '/io/emergency_active', 10)
             self.pub_bp     = self.create_publisher(Bool, '/io/bumper_active', 10)
-            self.pub_ack    = self.create_publisher(Bool, '/io/ack_needed', 10)
-            self.pub_armed  = self.create_publisher(Bool, '/io/ack_armed', 10)
+            # self.pub_ack    = self.create_publisher(Bool, '/io/ack_needed', 10)
+            # self.pub_armed  = self.create_publisher(Bool, '/io/ack_armed', 10)
         else:
             self.pub_em = self.pub_bp = self.pub_ack = self.pub_armed = None
 
@@ -105,6 +116,8 @@ class IOUDPNode(Node):
 
         self._last_inputs_tuple = None
         self._last_mask = 0
+        self._last_outputs_mask = None
+        self._last_outputs_tuple = None
 
         self._ack_needed = False
         self._ack_armed  = False
@@ -131,7 +144,14 @@ class IOUDPNode(Node):
         if ival == 1:
             self._cancel_delay_timer()
 
-    # ===== RX / publish inputs =====
+    # ===== Helpers: bit mask -> array [O1..O8] =====
+    @staticmethod
+    def _mask_to_outputs_array(mask: int):
+        mask &= 0xFF
+        # bit0=O1 ... bit7=O8  (ตรงกับฝั่ง ESP32)
+        return [ (mask >> i) & 1 for i in range(8) ]  # [O1..O8]
+
+    # ===== Publishers helpers =====
     def _publish_inputs_array(self, mask: int):
         mask &= 0xFF
         em = bool(mask & (1 << 0))
@@ -173,6 +193,25 @@ class IOUDPNode(Node):
             except Exception:
                 pass
 
+    def _publish_outputs(self, mask: int):
+        # ----- Int32 (mask) -----
+        mask &= 0xFF
+        if self._last_outputs_mask != mask:
+            msg_m = Int32(); msg_m.data = int(mask)
+            self.pub_outputs_mask.publish(msg_m)
+            self._last_outputs_mask = mask
+            self.get_logger().info(f'/io/outputs_mask: {mask} (0b{mask:08b})')
+
+        # ----- Int32MultiArray [O1..O8] -----
+        arr = self._mask_to_outputs_array(mask)  # [O1..O8]
+        t = tuple(arr)
+        if self._last_outputs_tuple != t:
+            msg_a = Int32MultiArray(); msg_a.data = arr
+            self.pub_outputs_arr.publish(msg_a)
+            self._last_outputs_tuple = t
+            self.get_logger().info(f'/io/outputs: {arr}')
+
+    # ===== UDP RX =====
     def _poll_udp_rx(self):
         while True:
             try:
@@ -184,6 +223,7 @@ class IOUDPNode(Node):
                 break
 
             if len(data) == 4:
+                # บอร์ดส่ง binary int32 เฉพาะกรณี IN (เวอร์ชันนี้ OUT ส่งเป็น ASCII)
                 (val,) = struct.unpack('<i', data)
                 self._publish_inputs_array(val)
                 continue
@@ -192,17 +232,27 @@ class IOUDPNode(Node):
                 s = data.decode(errors='ignore').strip()
             except Exception:
                 continue
+
             s_up = s.upper()
             if s_up.startswith('IN'):
-                if ':' in s: s = s.split(':',1)[1].strip()
-                elif '=' in s: s = s.split('=',1)[1].strip()
-                elif ' ' in s: s = s.split(' ',1)[1].strip()
-            if s.startswith(('0b','0B')):
-                try: self._publish_inputs_array(int(s[2:], 2))
-                except: pass
-            else:
-                try: self._publish_inputs_array(int(s, 10))
-                except: pass
+                # "IN:<mask>"
+                s2 = s.split(':',1)[1].strip() if ':' in s else s
+                try: self._publish_inputs_array(int(s2, 0))
+                except Exception: pass
+                continue
+
+            if s_up.startswith('OUT'):
+                # "OUT:<mask>"
+                s2 = s.split(':',1)[1].strip() if ':' in s else s
+                try: self._publish_outputs(int(s2, 0))             # NEW/CHANGED
+                except Exception: pass
+                continue
+
+            # รองรับ "<mask>" โดดๆ สำหรับ IN
+            try:
+                self._publish_inputs_array(int(s, 0))
+            except Exception:
+                pass
 
     # ===== Misc helpers =====
     def _emergency_active(self) -> bool:
@@ -276,7 +326,7 @@ class IOUDPNode(Node):
                 self._send_udp_int32(self.clear_value)  # -> 0
             return
 
-    # ===== BYPASS: Int32 (expect 3 or -3) =====  # NEW/CHANGED
+    # ===== BYPASS: Int32 (expect 3 or -3) =====
     def bypass_callback_int32(self, msg: Int32):
         v = int(msg.data)
         if v == 3 or v == -3:
