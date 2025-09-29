@@ -1,0 +1,35 @@
+io_control:
+  ros__parameters:
+    # ===== UDP Target =====
+    udp_ip: "10.1.100.200"           # IP ของ ESP32/W5500
+    udp_port: 8001                   # พอร์ตส่งคำสั่งไปบอร์ด
+    udp_listen_port: 8002            # พอร์ตรับรายงาน IN:/OUT: จากบอร์ด
+
+    # ===== Topic Names =====
+    topic_stop: "/stopRobotX"
+    topic_status: "/gmr_controllers/status"
+    topic_distance: "/closest_object_distance"
+    topic_inputs: "/io/inputs"        # Int32MultiArray [EMER,BUMPER,bit2,bit3]
+    topic_bypass: "/io/bypass"        # Bool -> UDP "BYP:1/0"
+
+    # ===== Distance Logic =====
+    distance_threshold: 1.0               # ถ้า < threshold -> alert_value (เมื่อไม่ติด emergency)
+    alert_value: -1                       # ค่าส่งเมื่อระยะ < threshold (edge-down)
+    clear_value: 0                        # ค่าส่งเมื่อกลับขึ้น >= threshold (edge-up)
+    distance_send_clear_on_edge_up: true  # true=ส่ง clear_value ตอน edge-up
+
+    # ===== Emergency / Re-arm Logic =====
+    suppress_alert_when_emergency_active: true  # true=ถ้า emergency=1 ค้างอยู่จะไม่ส่ง -1
+    rearm_delay_sec: 2.0                         # หน่วงส่ง -1 หลังปลดฉุกเฉินเป็น 0 ขณะยัง <threshold
+
+    # ===== QoS =====
+    qos_depth: 10
+    qos_reliability: "reliable"     # "reliable" หรือ "best_effort"
+    qos_durability: "volatile"      # "volatile" หรือ "transient_local"
+
+    # ===== Misc =====
+    dedupe_same_value: true                 # กันสแปม: ถ้าค่าซ้ำไม่ส่งซ้ำ
+    require_status_before_distance: true
+
+    # ===== Debug state topics =====
+    publish_debug_bools: true    
