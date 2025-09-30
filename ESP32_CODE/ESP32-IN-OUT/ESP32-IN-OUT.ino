@@ -58,6 +58,8 @@ IPAddress REPORT_IP(10, 1, 100, 100); // ใส่ IP เครื่อง ROS
 
 const bool OUTPUT_ACTIVE_LOW = false;
 const bool ACTIVE_LOW        = true;
+const bool EMER_ACTIVE_LOW   = false; //(สลับ EMER: กด=HIGH=>active)
+const bool BUMPER_ACTIVE_LOW = true;  //(เหมือนเดิม: กด=LOW=>active)
 
 const uint32_t DEBOUNCE_MS        = 25;
 const uint32_t STARTUP_GRACE_MS   = 300;
@@ -138,10 +140,20 @@ bool     lastStablePressed[2] = {false,false};
 bool     lastReadPressed[2]   = {false,false};
 uint32_t lastChangeMs[2]      = {0,0};
 
-inline bool rawPressedLevel(int pin) {
+// inline bool rawPressedLevel(int pin) {
+//   int lv = digitalRead(pin);
+//   return ACTIVE_LOW ? (lv == LOW) : (lv == HIGH);
+// }
+
+//สลับสถานะ input
+inline bool rawPressedLevel(int pin) {                       // NEW/CHANGED
   int lv = digitalRead(pin);
-  return ACTIVE_LOW ? (lv == LOW) : (lv == HIGH);
+  bool active_low = (pin == EMER_PIN) ? EMER_ACTIVE_LOW
+                                      : BUMPER_ACTIVE_LOW;
+  return active_low ? (lv == LOW) : (lv == HIGH);
 }
+
+
 uint8_t updateInputsDebounced() {
   uint32_t now = millis();
   uint8_t mask = 0;
