@@ -33,3 +33,7 @@ io_control:
 
     # ===== Debug state topics =====
     publish_debug_bools: true    
+
+    # ===== Bypass on start =====
+    bypass_on_start: true
+    bypass_start_value: 3

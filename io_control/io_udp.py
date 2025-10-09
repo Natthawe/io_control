@@ -49,6 +49,10 @@ class IOUDPNode(Node):
         # Debug state topics
         self.declare_parameter('publish_debug_bools', True)
 
+        # NEW: ส่ง BYPASS ตอนเริ่ม
+        self.declare_parameter('bypass_on_start', True)
+        self.declare_parameter('bypass_start_value', 3)
+
         # ===== Read params =====
         self.udp_ip            = self.get_parameter('udp_ip').get_parameter_value().string_value
         self.udp_port          = int(self.get_parameter('udp_port').get_parameter_value().integer_value)
@@ -80,6 +84,9 @@ class IOUDPNode(Node):
         self.dedupe_same_value = bool(self.get_parameter('dedupe_same_value').get_parameter_value().bool_value)
         self.require_status_before_distance = bool(self.get_parameter('require_status_before_distance').get_parameter_value().bool_value)
         self.publish_debug_bools = bool(self.get_parameter('publish_debug_bools').get_parameter_value().bool_value)
+
+        self.bypass_on_start   = bool(self.get_parameter('bypass_on_start').get_parameter_value().bool_value)
+        self.bypass_start_value= int(self.get_parameter('bypass_start_value').get_parameter_value().integer_value)
 
         # ===== UDP sockets =====
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -122,12 +129,18 @@ class IOUDPNode(Node):
         self._ack_needed = False
         self._ack_armed  = False
 
+        # Timer โพลล์ UDP RX
         self._rx_timer = self.create_timer(0.01, self._poll_udp_rx)
 
         self.get_logger().info(
             f'Node ready. TX->{self.udp_ip}:{self.udp_port}, RX<-:{self.udp_listen_port} | '
             f'th={self.distance_threshold}, alert={self.alert_value}, clear={self.clear_value}'
         )
+
+        # === NEW: ส่ง BYPASS ตอนเริ่ม ===
+        if self.bypass_on_start:
+            self._send_udp_int32(self.bypass_start_value)
+            self.get_logger().info(f'Initial BYPASS command sent: {self.bypass_start_value}')
 
     # ===== UDP send helper =====
     def _send_udp_int32(self, val: int):
@@ -148,7 +161,6 @@ class IOUDPNode(Node):
     @staticmethod
     def _mask_to_outputs_array(mask: int):
         mask &= 0xFF
-        # bit0=O1 ... bit7=O8  (ตรงกับฝั่ง ESP32)
         return [ (mask >> i) & 1 for i in range(8) ]  # [O1..O8]
 
     # ===== Publishers helpers =====
@@ -188,8 +200,8 @@ class IOUDPNode(Node):
             try:
                 self.pub_em.publish(Bool(data=em))
                 self.pub_bp.publish(Bool(data=bp))
-                self.pub_ack.publish(Bool(data=self._ack_needed))
-                self.pub_armed.publish(Bool(data=self._ack_armed))
+                # self.pub_ack.publish(Bool(data=self._ack_needed))
+                # self.pub_armed.publish(Bool(data=self._ack_armed))
             except Exception:
                 pass
 
@@ -223,7 +235,6 @@ class IOUDPNode(Node):
                 break
 
             if len(data) == 4:
-                # บอร์ดส่ง binary int32 เฉพาะกรณี IN (เวอร์ชันนี้ OUT ส่งเป็น ASCII)
                 (val,) = struct.unpack('<i', data)
                 self._publish_inputs_array(val)
                 continue
@@ -244,11 +255,10 @@ class IOUDPNode(Node):
             if s_up.startswith('OUT'):
                 # "OUT:<mask>"
                 s2 = s.split(':',1)[1].strip() if ':' in s else s
-                try: self._publish_outputs(int(s2, 0))             # NEW/CHANGED
+                try: self._publish_outputs(int(s2, 0))
                 except Exception: pass
                 continue
 
-            # รองรับ "<mask>" โดดๆ สำหรับ IN
             try:
                 self._publish_inputs_array(int(s, 0))
             except Exception:
@@ -332,7 +342,6 @@ class IOUDPNode(Node):
         if v == 3 or v == -3:
             self._send_udp_int32(v)
         else:
-            # ป้องกันค่าหลุด: เตือนและไม่ส่ง
             self.get_logger().warn(f'/io/bypass expects 3 or -3, got {v}; ignored.')
 
 def main(args=None):

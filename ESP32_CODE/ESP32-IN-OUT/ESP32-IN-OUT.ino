@@ -31,6 +31,66 @@ UDP:
 #include <Ethernet.h>
 #include <EthernetUdp.h>
 
+// ==================== WiFi & OTA ====================
+
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+
+char name[32] = { 0 };
+uint32_t chipId = 0;
+
+bool ota_ready = false;
+
+void getChipId() {
+  chipId = 0;
+  for (int i = 0; i < 17; i += 8) {
+    chipId |= ((ESP.getEfuseMac() >> (40 - i)) & 0xff) << i;
+  }
+
+  sprintf(name, "IO_%06X", chipId);
+
+  Serial.printf("ChipID: %06X\n", chipId);
+  Serial.printf("Generated Name: %s\n", name);
+}
+
+void OTA_Init() {
+  ArduinoOTA.setHostname(name);
+  ArduinoOTA.setPassword("zzzzzzzz");
+
+  // optional: callbacks เพื่อ debug เพิ่มเติม
+  ArduinoOTA
+    .onStart([]() { Serial.println("[OTA] Start"); })
+    .onEnd([]() { Serial.println("[OTA] End"); })
+    .onProgress([](unsigned int progress, unsigned int total) {
+      Serial.printf("[OTA] Progress: %u%%\n", (progress * 100) / total);
+    })
+    .onError([](ota_error_t error) {
+      Serial.printf("[OTA] Error[%u]\n", error);
+    });
+
+  // เรียก begin หลัง Wi-Fi AP พร้อมแล้ว
+  ArduinoOTA.begin();
+  ota_ready = true;
+  Serial.println("[OTA] Ready");
+}
+
+void WiFi_Init() 
+{
+  const char* password = "11111111";
+
+  WiFi.mode(WIFI_AP);
+  bool ok = WiFi.softAP(name, password);
+
+  Serial.print("SSID: ");
+  Serial.println(name);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.softAPIP());
+
+  if (!ok) {
+    Serial.println("softAP start FAILED");
+  }
+}
+
 // ==================== W5500 SPI Pins (ESP32) ====================
 #define W5500_MOSI  23
 #define W5500_MISO  19
@@ -53,7 +113,7 @@ bool      hasPeer = false;
 IPAddress REPORT_IP(10, 1, 100, 100); // ใส่ IP เครื่อง ROS 
 
 // ==================== Inputs/Outputs ====================
-#define EMER_PIN    32
+#define EMER_PIN    36
 #define BUMPER_PIN  26
 
 const bool OUTPUT_ACTIVE_LOW = false;
@@ -435,7 +495,13 @@ void generateRandomMAC(byte *mac) {
 // ==================== Setup/Loop ====================
 void setup() {
   Serial.begin(115200);
-  delay(300);
+  delay(200);
+
+  getChipId();          // สร้าง name ให้เรียบร้อยก่อน
+  WiFi_Init();          // <-- เริ่ม Wi-Fi AP ก่อน
+  OTA_Init();           // <-- แล้วค่อย begin OTA (ภายในจะใช้ Wi-Fi)
+  // ota_ready จะถูกตั้งค่าใน OTA_Init() ถ้า begin สำเร็จ
+
   Serial.println();
   Serial.println(F("=== ESP32 I/O Bench + W5500/UDP — BYPASS with 3/-3, cases 0/1/-1/2/-2 ==="));
   Serial.println(F("Pins: EMER=36 (INPUT + external pull-up), BUMPER=26 (INPUT_PULLUP)"));
@@ -448,7 +514,7 @@ void setup() {
   // Outputs
   for (int i = 0; i < 8; i++) { pinMode(OUT_PINS[i], OUTPUT); g_blink[i] = {false,false,0,0,0,0,0}; }
   setDefaultOutputs();
-  setOutputByIndex(RELAY2_IDX, true); // O7 ON เสมอ
+  setOutputByIndex(RELAY2_IDX, true); // O7 Always ON
 
   // Ethernet/W5500
   SPI.begin(W5500_SCK, W5500_MISO, W5500_MOSI, W5500_CS);
@@ -482,14 +548,18 @@ void setup() {
 
   // first input report
   uint8_t mask = updateInputsDebounced();
-  sendInputsReport(mask);
-  sendOutputsReport();                     // NEW/CHANGED: ส่ง OUT ครั้งแรก
+  sendInputsReport(mask);     // ส่ง IN ครั้งแรก
+  sendOutputsReport();        // ส่ง OUT ครั้งแรก
 
   g_boot_ms = millis();
   Serial.println(F("Ready."));
 }
 
 void loop() {
+  if (ota_ready) {
+    ArduinoOTA.handle();
+  }
+
   tickBlinkAll();
 
   if (millis() - g_boot_ms >= STARTUP_GRACE_MS) {
