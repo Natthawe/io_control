@@ -22,7 +22,7 @@ setup(
     maintainer_email='natthawejumjai@gmail.com',
     description='Input/Output Control',
     license='Apache-2.0',
-    tests_require=['pytest'],
+    # tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'io_udp = io_control.io_udp:main',
