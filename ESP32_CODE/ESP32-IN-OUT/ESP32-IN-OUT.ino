@@ -57,7 +57,7 @@ void OTA_Init() {
   ArduinoOTA.setHostname(name);
   ArduinoOTA.setPassword("zzzzzzzz");
 
-  // optional: callbacks เพื่อ debug เพิ่มเติม
+  // Callbacks สำหรับ debug เพิ่มเติม
   ArduinoOTA
     .onStart([]() { Serial.println("[OTA] Start"); })
     .onEnd([]() { Serial.println("[OTA] End"); })
@@ -161,10 +161,12 @@ static inline void writeOutputPin(int pin, bool on) {
   if (OUTPUT_ACTIVE_LOW) digitalWrite(pin, on ? LOW : HIGH);
   else                   digitalWrite(pin, on ? HIGH : LOW);
 }
+
 static inline void setOutputByIndex(int idx, bool on) {
   if (idx < 0 || idx >= 8) return;
   writeOutputPin(OUT_PINS[idx], on);
 }
+
 void setAllOutputs(bool on) { for (int i = 0; i < 8; i++) setOutputByIndex(i, on); }
 void setDefaultOutputs()    { setAllOutputs(false); }
 
@@ -178,6 +180,7 @@ void stopBlink(int idx, bool force_off = true) {
   g_blink[idx] = {false,false,0,0,0,0,0};
   if (force_off) setOutputByIndex(idx, false);
 }
+
 void stopAllBlinks(bool force_off = true) { for (int i = 0; i < 8; i++) stopBlink(i, force_off); }
 
 void tickBlinkAll() {
@@ -200,19 +203,13 @@ bool     lastStablePressed[2] = {false,false};
 bool     lastReadPressed[2]   = {false,false};
 uint32_t lastChangeMs[2]      = {0,0};
 
-// inline bool rawPressedLevel(int pin) {
-//   int lv = digitalRead(pin);
-//   return ACTIVE_LOW ? (lv == LOW) : (lv == HIGH);
-// }
-
 //สลับสถานะ input
-inline bool rawPressedLevel(int pin) {                       // NEW/CHANGED
+inline bool rawPressedLevel(int pin) {
   int lv = digitalRead(pin);
   bool active_low = (pin == EMER_PIN) ? EMER_ACTIVE_LOW
                                       : BUMPER_ACTIVE_LOW;
   return active_low ? (lv == LOW) : (lv == HIGH);
 }
-
 
 uint8_t updateInputsDebounced() {
   uint32_t now = millis();
@@ -226,9 +223,10 @@ uint8_t updateInputsDebounced() {
   }
   return mask;
 }
+
 inline bool isActive(uint8_t mask, int bit) { return (mask & (1 << bit)) != 0; }
 
-// ==================== Link helper ====================
+// ==================== Link Status ====================
 inline bool link_up() { return Ethernet.linkStatus() == LinkON; }
 
 // ==================== Serial/UDP Report ====================
@@ -304,7 +302,7 @@ int32_t  requested_case    = 9999;
 uint32_t requested_case_ms = 0;
 const uint32_t REQUEST_HOLD_MS = 0;
 
-// ==================== Helpers ====================
+// ==================== Print State ====================
 void printState(const char* tag) {
   Serial.print(tag); Serial.print(" | ");
   for (int i = 0; i < 8; ++i) {
@@ -415,7 +413,7 @@ void applyCommand(int32_t cmd) {
     } break;
   }
   printState("STATE");
-  maybeReportOutputs();                           // NEW/CHANGED: รายงาน OUT หลังเปลี่ยน
+  maybeReportOutputs();          // Report OUTPUT หลังเปลี่ยน
 }
 
 void applyCase(int32_t c) {
@@ -480,7 +478,7 @@ int32_t parseCmdFromPacket(int packetSize) {
   return (int32_t)atoi(s);
 }
 
-// ==================== Helpers (MAC) ====================
+// ==================== Random (MAC) ====================
 void generateRandomMAC(byte *mac) {
   uint32_t r1 = esp_random();
   uint32_t r2 = esp_random();
